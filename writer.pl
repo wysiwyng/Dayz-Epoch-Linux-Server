@@ -18,11 +18,40 @@ use constant {
     DB_PORT   => 3306,         # Set database port (default 3306)
 
     CACHE_DIR => $ENV{'PWD'}.'/cache/',
-    # Start inventory of player
-    INVENTORY => '[["ItemFlashlight","ItemMap","ItemGPS","MeleeCrowbar"],["ItemBandage","ItemPainkiller","ItemSodaPepsi","ItemSodaCoke","FoodbeefCooked"]]',
-    BACKPACK  => '["DZ_Patrol_Pack_EP1",[],[]]',
-    MODEL     => '"Survivor2_DZ"'
 };
+
+# insert admins here, <player uid> => <admin level>
+my %adminLevels = (
+    123456 => 2,
+);
+
+# loadouts for adminlevels, <admin level> => <loadout>
+my %loadouts = (
+    0 => '[["ItemFlashlight","ItemHatchet"],["ItemBandage","ItemBandage","ItemPainkiller","ItemSodaPepsi","ItemSodaCoke","FoodbeefCooked"]]',
+    1 => '[["ItemFlashlight","ItemHatchet"],["ItemBandage","ItemBandage","ItemPainkiller","ItemSodaPepsi","ItemSodaCoke","FoodbeefCooked"]]',
+    2 => '[["ItemGPS","ItemEtool","ItemFlashlightRed","ItemHatchet","ItemMap","ItemMatchbox_DZE","ItemToolbox","UZI_SD_EP1","SCAR_H_STD_TWS_SD","Binocular_Vector","NVGoggles"],["ItemBandage","ItemBandage","ItemBandage","ItemBandage","20Rnd_762x51_SB_SCAR","20Rnd_762x51_SB_SCAR","20Rnd_762x51_SB_SCAR","20Rnd_762x51_SB_SCAR","30Rnd_9x19_UZI_SD","30Rnd_9x19_UZI_SD","30Rnd_9x19_UZI_SD","30Rnd_9x19_UZI_SD"]]',
+);
+
+# backpack and contents, <admin level> => <loadout>
+my %backpacks = (
+    0 => '["DZ_Patrol_Pack_EP1",[],[]]',
+    1 => '["DZ_Patrol_Pack_EP1",[],[]]',
+    2 => '["DZ_LargeGunBag_EP1",[["PMC_AS50_TWS"],[1]],[["5Rnd_127x99_as50","ItemWaterbottle","FoodCanBakedBeans","ItemPainkiller","ItemMorphine","ItemAntibiotic"],[4,2,5,2,2,2]]]',
+);
+
+# models, <admin level> => <model>
+my %models = (
+    0 => '"Survivor2_DZ"',
+    1 => '"CZ_Special_Forces_GL_DES_EP1_DZ"',
+    2 => '"Sniper1_DZ"',
+);
+
+# start humanity, <admin level> => <model>
+my %humanities = (
+    0 => 2500,
+    1 => 3000,
+    2 => 10000,
+);
 
 my %cid_inv = ();
 my %obj_inv = ();
@@ -123,7 +152,7 @@ sub init_objects {
 sub init_default_player {
     my $file = CACHE_DIR.'players/default.sqf';
     open  (OUT, ">$file") or die "Can't open '$file'";
-    print OUT '["PASS",false,"1",[],'.INVENTORY.','.BACKPACK.',[0,0,0],'.MODEL.',0.96]';
+    print OUT '["PASS",false,"1",[],'.$loadouts{0}.','.$backpacks{0}.',[0,0,0],'.$models{0}.',0.96]';
     close (OUT);
 }
 
@@ -439,6 +468,10 @@ sub h_load_player {
     $playerId =~ s/['"]//g;
     $serverId ||= INSTANCE;
     
+    my $adminLevel = 0;
+    
+    $adminLevel = $adminLevels{$playerId} if (exists $adminLevels{$playerId});
+    
     my $PLAYERS_DIR = CACHE_DIR.'players/'.$myPlayerCounter;
     mkdir ($PLAYERS_DIR) unless (-d $PLAYERS_DIR);
     
@@ -481,13 +514,14 @@ sub h_load_player {
         $model, $medical, $humanity, $killsZ, $headshotsZ, $killsH, $killsB, $currentState) = $sth->fetchrow_array;
     $sth->finish;
     
+    $humanity   = $humanities{$adminLevel}  unless (defined $humanity);
+    $inventory  = $loadouts{$adminLevel}    unless (defined $inventory);
+    $backpack   = $backpacks{$adminLevel}   unless (defined $backpack);
+    $model      = $models{$adminLevel}      unless (defined $model);
+    
     $currentState = '[]'      unless (defined $currentState);
-    $humanity     = 2500      unless (defined $humanity);
     $medical      = '[]'      unless (defined $medical);
     $worldSpace   = '[]'      unless (defined $worldSpace);
-    $inventory    = INVENTORY unless (defined $inventory);  # '[]'
-    $backpack     = BACKPACK  unless (defined $backpack);   # '[]'
-    $model        = MODEL     unless (defined $model);      # ''
     
     my $survival = '[0,0,0]';
     $survival    = '['.$survivalTime.','.$minsLastAte.','.$minsLastDrank.']' if (defined $survivalTime && 
@@ -523,14 +557,15 @@ sub h_load_player {
             $generation = 1;
         }
         
-        $humanity = 2500    unless (defined $humanity);
-        $model    = $cmodel if (defined $cmodel); 
+        $humanity = $humanities{$adminLevel} unless (defined $humanity);
+
+        $model = $cmodel if (defined $cmodel); 
         
         $sql = "INSERT INTO Character_DATA(PlayerUID, InstanceID, Worldspace, Inventory, Backpack, Medical,
-                                           Generation, Datestamp, LastLogin, LastAte, LastDrank, Humanity) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)";
+                                           Generation, Datestamp, LastLogin, LastAte, LastDrank, Humanity, Model) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)";
         $sth = $dbh->prepare ($sql);
-        $res = $sth->execute ($playerId, $serverId, $worldSpace, $inventory, $backpack, $medical, $generation, $humanity);
+        $res = $sth->execute ($playerId, $serverId, $worldSpace, $inventory, $backpack, $medical, $generation, $humanity, $model);
         
         $sql = 'SELECT CharacterID FROM Character_DATA WHERE PlayerUID=? AND Alive = 1 AND InstanceID=? ORDER BY CharacterID DESC LIMIT 1';
         $sth = $dbh->prepare ($sql);
@@ -695,14 +730,14 @@ sub h_player_update {
             $model = undef;
         }
     }
-    
+
     my $str = '';
     $str .= 'Worldspace='.$dbh->quote($worldSpace).','            if ($worldSpace && $worldSpace ne '[]');
-    $str .= 'Inventory='.$dbh->quote($inventory).','              if ($inventory  && $inventory  ne INVENTORY && $inventory ne '[]');
-    $str .= 'Backpack='.$dbh->quote($backpack).','                if ($backpack   && $backpack   ne BACKPACK && $backpack ne '[]');
+    $str .= 'Inventory='.$dbh->quote($inventory).','              if ($inventory  && $inventory  ne $loadouts{0} && $inventory  ne $loadouts{1} && $inventory  ne $loadouts{2} && $inventory ne '[]');
+    $str .= 'Backpack='.$dbh->quote($backpack).','                if ($backpack   && $backpack   ne $backpacks{0} && $backpack   ne $backpacks{1} && $backpack   ne $backpacks{2} && $backpack ne '[]');
     $str .= 'Medical='.$dbh->quote($medical).','                  if ($medical    && $medical    ne '[]');
     $str .= 'CurrentState='.$dbh->quote($currentState).','        if ($currentState && $currentState ne '[]');
-    $str .= 'Model='.$dbh->quote($model).','                      if ($model && $model ne MODEL);
+    $str .= 'Model='.$dbh->quote($model).','                      if ($model && $model ne $models{0} && $model ne $models{1} && $model ne $models{2});
     
     $str .= 'LastAte=CURRENT_TIMESTAMP,'                          if ($justAte   && $justAte   eq 'true');
     $str .= 'LastDrank=CURRENT_TIMESTAMP,'                        if ($justDrank && $justDrank eq 'true');
